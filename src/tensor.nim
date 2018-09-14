@@ -114,8 +114,8 @@ proc replaceNodes(ast: NimNode, values: NimNode, containers: NimNode): NimNode =
         if node.eqIdent($c):
           return values[i]
       return node
-    of nnkEmpty:
-      return node
+    of nnkEmpty: return node
+    of nnkLiterals: return node
     else:
       var rTree = node.kind.newTree()
       for child in node:
@@ -180,13 +180,25 @@ macro broadcast(inputs_body: varargs[untyped]): untyped =
       output
 
 when isMainModule:
+  import math
+
   let x = randomTensor([1, 2, 3], 10)
   let y = randomTensor([5, 2], 10)
 
-  echo x
-  echo y
+  echo x # (shape: [1, 2, 3], strides: [6, 3, 1], offset: 0, storage: (data: @[1, 10, 5, 5, 7, 3]))
+  echo y # (shape: [5, 2], strides: [2, 1], offset: 0, storage: (data: @[8, 3, 7, 9, 3, 8, 5, 3, 7, 1]))
 
-  let a = broadcast(x, y):
-    x * y
+  block: # Simple assignation
+    let a = broadcast(x, y):
+      x * y
 
-  echo a
+    echo a # (shape: [5, 2, 3], strides: [6, 3, 1], offset: 0, storage: (data: @[8, 80, 40, 15, 21, 9, 7, 70, 35, 45, 63, 27, 3, 30, 15, 40, 56, 24, 5, 50, 25, 15, 21, 9, 7, 70, 35, 5, 7, 3]))
+
+  block: # Complex multi statement with type conversion
+    let a = broadcast(x, y):
+      let c = cos x.float64
+      let s = sin y.float64
+
+      sqrt(c.pow(2) + s.pow(2))
+
+    echo a # (shape: [5, 2, 3], strides: [6, 3, 1], offset: 0, storage: (data: @[1.12727828058919, 1.297255090978019, 1.029220081237957, 0.3168265963213802, 0.7669963922853442, 0.9999999999999999, 0.8506221091780486, 1.065679324094626, 0.7156085706291233, 0.5003057878335346, 0.859191628789455, 1.072346394223034, 0.5584276483137685, 0.8508559734652587, 0.3168265963213802, 1.029220081237957, 1.243864280886628, 1.399612404734566, 1.100664502137075, 1.274196529364651, 1.0, 0.3168265963213802, 0.7669963922853442, 0.9999999999999999, 0.8506221091780486, 1.065679324094626, 0.7156085706291233, 0.8879964266455946, 1.129797339073468, 1.299291561428286]))
