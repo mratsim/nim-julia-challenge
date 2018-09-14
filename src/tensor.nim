@@ -202,3 +202,22 @@ when isMainModule:
       sqrt(c.pow(2) + s.pow(2))
 
     echo a # (shape: [5, 2, 3], strides: [6, 3, 1], offset: 0, storage: (data: @[1.12727828058919, 1.297255090978019, 1.029220081237957, 0.3168265963213802, 0.7669963922853442, 0.9999999999999999, 0.8506221091780486, 1.065679324094626, 0.7156085706291233, 0.5003057878335346, 0.859191628789455, 1.072346394223034, 0.5584276483137685, 0.8508559734652587, 0.3168265963213802, 1.029220081237957, 1.243864280886628, 1.399612404734566, 1.100664502137075, 1.274196529364651, 1.0, 0.3168265963213802, 0.7669963922853442, 0.9999999999999999, 0.8506221091780486, 1.065679324094626, 0.7156085706291233, 0.8879964266455946, 1.129797339073468, 1.299291561428286]))
+
+  block: # Variadic number of types with proc declaration inside
+    var u, v, w, x, y, z = randomTensor([3, 3], 10)
+
+    let c = 2
+
+    let a = broadcast(u, v, w, x, y, z):
+      # ((u * v * w) div c) mod (if not zero (x - y + z) else 42)
+
+      proc ifNotZero(val, default: int): int =
+        if val == 0: default
+        else: val
+
+      let uvw_divc = u * v * w div c
+      let xmypz = x - y + z
+
+      uvw_divc mod ifNotZero(xmypz, 42)
+
+    echo a # (shape: [3, 3], strides: [3, 1], offset: 0, storage: (data: @[0, 0, 0, 7, 4, 0, 0, 2, 0]))
