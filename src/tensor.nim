@@ -132,7 +132,12 @@ proc pop*(tree: var NimNode): NimNode =
 func nb_elems[N: static[int], T](x: typedesc[array[N, T]]): static[int] =
   N
 
-macro broadcast(inputs_body: varargs[untyped]): untyped =
+macro broadcastImpl(output: untyped, inputs_body: varargs[untyped]): untyped =
+  ## If output is empty node it will return a value
+  ## otherwise, result will be assigned in-place to output
+  let
+    in_place = newLit output.kind != nnkEmpty
+
   var
     inputs = inputs_body
     body = inputs.pop()
@@ -160,12 +165,18 @@ macro broadcast(inputs_body: varargs[untyped]): untyped =
       var `coord`: array[rank, int] # Current coordinates in the n-dimensional space
       `doBroadcast`
 
-      var output = newTensor[rank, type(`body`)](`shape`)
+      when not `in_place`:
+        var output = newTensor[rank, type(`body`)](`shape`)
+      else:
+        assert `output`.shape == `shape`
       var counter = 0
 
       while counter < `shape`.product:
         # Assign for the current iteration
-        output[`coord`] = `body`
+        when not `in_place`:
+          output[`coord`] = `body`
+        else:
+          `output`[`coord`] = `body`
 
         # Compute the next position
         for k in countdown(rank - 1, 0):
@@ -177,9 +188,17 @@ macro broadcast(inputs_body: varargs[untyped]): untyped =
         inc counter
 
       # Now return the value
-      output
+      when not `in_place`:
+        output
+
+macro broadcast(inputs_body: varargs[untyped]): untyped =
+  getAST(broadcastImpl(newEmptyNode(), inputs_body))
+
+macro materialize(output: var Tensor, inputs_body: varargs[untyped]): untyped =
+  getAST(broadcastImpl(output, inputs_body))
 
 when isMainModule:
+  # Sanity checks
   import math
 
   let x = randomTensor([1, 2, 3], 10)
@@ -189,12 +208,22 @@ when isMainModule:
   echo y # (shape: [5, 2], strides: [2, 1], offset: 0, storage: (data: @[8, 3, 7, 9, 3, 8, 5, 3, 7, 1]))
 
   block: # Simple assignation
+    echo "\nSimple assignation"
     let a = broadcast(x, y):
       x * y
 
     echo a # (shape: [5, 2, 3], strides: [6, 3, 1], offset: 0, storage: (data: @[8, 80, 40, 15, 21, 9, 7, 70, 35, 45, 63, 27, 3, 30, 15, 40, 56, 24, 5, 50, 25, 15, 21, 9, 7, 70, 35, 5, 7, 3]))
 
+  block: # In-place, similar to Julia impl
+    echo "\nIn-place, similar to Julia impl"
+    var a = newTensor[3, int]([5, 2, 3])
+    materialize(a, x, y):
+      x * y
+
+    echo a
+
   block: # Complex multi statement with type conversion
+    echo "\nComplex multi statement with type conversion"
     let a = broadcast(x, y):
       let c = cos x.float64
       let s = sin y.float64
@@ -204,6 +233,7 @@ when isMainModule:
     echo a # (shape: [5, 2, 3], strides: [6, 3, 1], offset: 0, storage: (data: @[1.12727828058919, 1.297255090978019, 1.029220081237957, 0.3168265963213802, 0.7669963922853442, 0.9999999999999999, 0.8506221091780486, 1.065679324094626, 0.7156085706291233, 0.5003057878335346, 0.859191628789455, 1.072346394223034, 0.5584276483137685, 0.8508559734652587, 0.3168265963213802, 1.029220081237957, 1.243864280886628, 1.399612404734566, 1.100664502137075, 1.274196529364651, 1.0, 0.3168265963213802, 0.7669963922853442, 0.9999999999999999, 0.8506221091780486, 1.065679324094626, 0.7156085706291233, 0.8879964266455946, 1.129797339073468, 1.299291561428286]))
 
   block: # Variadic number of types with proc declaration inside
+    echo "\nVariadic number of types with proc declaration inside"
     var u, v, w, x, y, z = randomTensor([3, 3], 10)
 
     let c = 2
