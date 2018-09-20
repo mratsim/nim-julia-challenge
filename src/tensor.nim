@@ -197,9 +197,11 @@ macro broadcast(inputs_body: varargs[untyped]): untyped =
 macro materialize(output: var Tensor, inputs_body: varargs[untyped]): untyped =
   getAST(broadcastImpl(output, inputs_body))
 
-when isMainModule:
+#################################################################################
+
+import math
+proc sanityChecks() =
   # Sanity checks
-  import math
 
   let x = randomTensor([1, 2, 3], 10)
   let y = randomTensor([5, 2], 10)
@@ -251,3 +253,47 @@ when isMainModule:
       uvw_divc mod ifNotZero(xmypz, 42)
 
     echo a # (shape: [3, 3], strides: [3, 1], offset: 0, storage: (data: @[0, 0, 0, 7, 4, 0, 0, 2, 0]))
+
+#################################################################################
+
+import math, random, times, stats, strformat
+proc mainBench(nb_samples: int) =
+  ## Bench with standard lib
+  block: # Warmup - make sure cpu is on max perf
+    let start = cpuTime()
+    var foo = 123
+    for i in 0 ..< 100_000_000:
+      foo += i*i mod 456
+      foo = foo mod 789
+
+    # Compiler shouldn't optimize away the results as cpuTime rely on sideeffects
+    let stop = cpuTime()
+    echo &"Warmup: {stop - start:>4.4f} s, result {foo} (displayed to avoid compiler optimizing warmup away)"
+
+  let
+    a = randomTensor([1000, 1000], 1.0)
+    b = randomTensor([1000], 1.0)
+    c = 1.0
+  var output = newTensor[2, float64](a.shape)
+
+  block: # Actual bench
+    var stats: RunningStat
+    for _ in 0 ..< nb_samples:
+      let start = cpuTime()
+      materialize(output, a, b, c):
+        a + b - sin c
+      let stop = cpuTime()
+      stats.push stop - start
+
+    echo &"Collected {stats.n} samples"
+    echo &"Average broadcast time: {stats.mean:>4.4f}s"
+    echo &"Stddev  broadcast time: {stats.standardDeviationS:>4.4f}s"
+    echo &"Min     broadcast time: {stats.min:>4.4f}s"
+    echo &"Max     broadcast time: {stats.max:>4.4f}s"
+
+when isMainModule:
+  sanityChecks()
+  echo "\n###################"
+  echo "Benchmark"
+  # {.passC: "-march=native" .} # uncomment to enable full optim (AVX/AVX2, ...)
+  mainBench(1_000)
