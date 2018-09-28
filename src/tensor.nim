@@ -37,6 +37,13 @@ func newTensor*[Rank: static[int], T](shape: array[Rank, int]): Tensor[Rank, T] 
   tensor(result, shape)
   result.storage.data = newSeq[T](shape.product)
 
+proc rand[T: object|tuple](max: T): T =
+  ## A generic random function for any stack object or tuple
+  ## that initialize all fields randomly
+  result = max
+  for field in result.fields:
+    field = rand(field)
+
 proc randomTensor*[Rank: static[int], T](shape: array[Rank, int], max: T): Tensor[Rank, T] =
   tensor(result, shape)
   result.storage.data = newSeqWith(shape.product, T(rand(max)))
@@ -169,9 +176,8 @@ macro broadcastImpl(output: untyped, inputs_body: varargs[untyped]): untyped =
         var output = newTensor[rank, type(`body`)](`shape`)
       else:
         assert `output`.shape == `shape`
-      var counter = 0
 
-      while counter < `shape`.product:
+      for _ in 0 ..< `shape`.product:
         # Assign for the current iteration
         when not `in_place`:
           output[`coord`] = `body`
@@ -185,7 +191,6 @@ macro broadcastImpl(output: untyped, inputs_body: varargs[untyped]): untyped =
             break
           else:
             `coord`[k] = 0
-        inc counter
 
       # Now return the value
       when not `in_place`:
@@ -254,6 +259,17 @@ proc sanityChecks() =
 
     echo a # (shape: [3, 3], strides: [3, 1], offset: 0, storage: (data: @[0, 0, 0, 7, 4, 0, 0, 2, 0]))
 
+  block: # Simple broadcasted addition test
+    echo "\nSimple broadcasted addition test"
+    var a = newTensor[2, int]([2, 3])
+    a.storage.data = @[3, 2, 1, 1, 2, 3] # Ideally we should have arrays of arrays -> tensor conversion
+    var b = newTensor[2, int]([1, 3])
+    b.storage.data = @[1, 2, 3]
+
+    let c = broadcast(a, b): a + b
+    doAssert c.storage.data == @[4, 4, 4, 2, 4, 6]
+    echo "✓ Passed"
+
 #################################################################################
 
 import math, random, times, stats, strformat
@@ -285,15 +301,72 @@ proc mainBench(nb_samples: int) =
       let stop = cpuTime()
       stats.push stop - start
 
+    echo &"\nTensors of Float64 bench"
     echo &"Collected {stats.n} samples"
-    echo &"Average broadcast time: {stats.mean:>4.4f}s"
-    echo &"Stddev  broadcast time: {stats.standardDeviationS:>4.4f}s"
-    echo &"Min     broadcast time: {stats.min:>4.4f}s"
-    echo &"Max     broadcast time: {stats.max:>4.4f}s"
+    echo &"Average broadcast time: {stats.mean * 1000 :>4.3f}ms"
+    echo &"Stddev  broadcast time: {stats.standardDeviationS * 1000 :>4.3f}ms"
+    echo &"Min     broadcast time: {stats.min * 1000 :>4.3f}ms"
+    echo &"Max     broadcast time: {stats.max * 1000 :>4.3f}ms"
+    echo "\nDisplay output[[0,0]] to make sure it's not optimized away"
+    echo output[[0, 0]]
+
+proc geometryBench(nb_samples: int) =
+  type Point3 = object
+    x, y, z: float32
+
+  template liftBinary(op: untyped): untyped =
+    func `op`(a, b: Point3): Point3 {.inline.}=
+      result.x = `op`(a.x, b.x)
+      result.y = `op`(a.y, b.y)
+      result.z = `op`(a.z, b.z)
+    func `op`(a: Point3, b: float32): Point3 {.inline.}=
+      result.x = `op`(a.x, b)
+      result.y = `op`(a.y, b)
+      result.z = `op`(a.z, b)
+  template liftReduce(opName, op: untyped): untyped =
+    func `opName`(a: Point3): float32 {.inline.}=
+      a.x.`op`(a.y).`op`(a.z)
+
+  liftBinary(`+`)
+  liftBinary(`*`)
+  liftBinary(`-`)
+  liftReduce(sum, `+`)
+
+  let
+    a = randomTensor([1_000_000], Point3(x: 100, y: 100, z: 100))
+    b = randomTensor([1_000_000], Point3(x: 100, y: 100, z: 100))
+    c = 1.0'f32 # Julia has Point3 has float32 but C has float64
+  var output = newTensor[1, float32](a.shape)
+
+  block: # Custom function sqrt(sum(a .* b))
+    func super_custom_func(a, b: Point3): float32 = sqrt sum(a * b)
+
+    var stats: RunningStat
+    for _ in 0 ..< nb_samples:
+      let start = cpuTime()
+      materialize(output, a, b):
+        super_custom_func(a, b)
+      let stop = cpuTime()
+      stats.push stop - start
+
+    echo &"\nTensor of 3D float32 points bench"
+    echo &"Collected {stats.n} samples"
+    echo &"Average broadcast time: {stats.mean * 1000 :>4.3f}ms"
+    echo &"Stddev  broadcast time: {stats.standardDeviationS * 1000 :>4.3f}ms"
+    echo &"Min     broadcast time: {stats.min * 1000 :>4.3f}ms"
+    echo &"Max     broadcast time: {stats.max * 1000 :>4.3f}ms"
+    echo "\nDisplay output[[0]] to make sure it's not optimized away"
+    echo output[[0]]
 
 when isMainModule:
   sanityChecks()
   echo "\n###################"
   echo "Benchmark"
   # {.passC: "-march=native" .} # uncomment to enable full optim (AVX/AVX2, ...)
+  # randomize(seed = 0)
   mainBench(1_000)
+  geometryBench(1_000)
+
+  # Compile with
+  # nim c -d:release nim/nim_sol_mratsim.nim     # for binary only
+  # nim c -r -d:release nim/nim_sol_mratsim.nim  # for binary + running
